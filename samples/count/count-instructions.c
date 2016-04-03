@@ -6,6 +6,8 @@
  * Demonstrates using ptrace to run a new process under this
  * "debugger" process, and then using single-step to take some action
  * each time an instruction in the "debuggee" is executed.
+ *
+ * Usage: ./count-instructions sample01
  */
 
 #include <stdarg.h>
@@ -45,18 +47,33 @@ int main(int argc, char** argv)
     }
 
     if (pid == 0) {
-        // Child process, the debuggee.
-        procmsg("starting %s.\n", progname);
+        procmsg("starting debugee: %s.\n", progname);
+
+        if (ptrace(PTRACE_TRACEME, 0, 0, 0) < 0) {
+            perror("ptrace");
+            return -1;
+        }
 
         execl(progname, progname, 0);
+        perror("debugee failed to run");
     }
+
     else {
-        // Parent process, the debugger.
         procmsg("starting debugger.\n");
 
         int status;
+        unsigned int count = 0;
+
         waitpid(pid, &status, 0);
 
-        procmsg("debugger exiting.\n");
+        while (WIFSTOPPED(status)) {
+            ptrace(PTRACE_SINGLESTEP, pid, 0, 0);
+            waitpid(pid, &status, 0);
+            ++count;
+        }
+
+        waitpid(pid, &status, 0);
+
+        procmsg("debugee executed %d instructions.\n", count);
     }
 }
