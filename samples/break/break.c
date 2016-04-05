@@ -1,3 +1,16 @@
+/* Set and execute a breakpoint on a child process.
+ *
+ * Works by manually writing the int 3 opcode at the desired memory
+ * location in the child program's code. When the interrupt is reached
+ * the parent is signaled, which then replaces the original
+ * instruction before continuing.
+ *
+ * This code is 64-bit specific due to the difference in the
+ * definition of the user_regs_struct between 32-bit and 64-bit
+ * systems.
+ */
+
+#include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <sys/ptrace.h>
@@ -8,7 +21,7 @@
 
 int main()
 {
-    const char * progname = "sample";
+    const char *progname = "sample";
     pid_t pid = fork();
 
     if (pid < 0) {
@@ -26,12 +39,22 @@ int main()
         waitpid(pid, &status, 0);
 
         if (WIFSTOPPED(status)) {
-            uintptr_t addr = 0x4000c6;
-            uintptr_t data = ptrace(PTRACE_PEEKTEXT, pid, (void*)addr, 0);
-            printf("Original data at 0x%16lx: 0x%16lx\n", addr, data);
+            intptr_t addr = 0x4000c6;
+            intptr_t data;
 
-            uintptr_t data_with_bp = (data & 0xFFFFFFFFFFFFFF00) | 0xCC;
-            ptrace(PTRACE_POKETEXT, pid, (void*)addr, (void*)data_with_bp);
+            data = (intptr_t)ptrace(PTRACE_PEEKTEXT, pid, (void *)addr, 0);
+
+            if (data == -1 && errno) {
+                perror("peektext");
+                return -1;
+            }
+
+            printf("Original data at %p: 0x%x\n", (void *)addr, (int)(data & 0xFF));
+
+            intptr_t mask = UINTPTR_MAX - 0xFF;
+            intptr_t data_with_bp = (data & mask) | 0xCC;
+
+            ptrace(PTRACE_POKETEXT, pid, (void *)addr, (void *)data_with_bp);
 
             ptrace(PTRACE_CONT, pid, 0, 0);
             waitpid(pid, &status, 0);
@@ -41,10 +64,10 @@ int main()
                 struct user_regs_struct regs;
                 ptrace(PTRACE_GETREGS, pid, 0, &regs);
 
-                // "rip" replace "eip" on x86-64.
+                // Name of the ip register on the user_regs_struct on 64-bit systems.
                 regs.rip -= 1;
 
-                ptrace(PTRACE_POKETEXT, pid, (void*)addr, (void*)data);
+                ptrace(PTRACE_POKETEXT, pid, (void *)addr, (void *)data);
                 ptrace(PTRACE_SETREGS, pid, 0, &regs);
                 ptrace(PTRACE_CONT, pid, 0, 0);
             }
